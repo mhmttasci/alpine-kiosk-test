@@ -2,28 +2,88 @@ name: Build Alpine Kiosk Image
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Manuel tetikleme imkanı
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
+      # 1. Repo'yu checkout et
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # 2. Gerekli paketleri yükle
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y squashfs-tools wget
-
-      - name: Build image
+          sudo apt-get install -y \
+            wget \
+            curl \
+            xorriso \
+            squashfs-tools \
+            genisoimage \
+            dosfstools \
+            grub-pc-bin \
+            grub-efi-amd64-bin \
+            mtools
+      
+      # 3. Build script'ini çalıştırılabilir yap
+      - name: Make build script executable
+        run: chmod +x build_image.sh
+      
+      # 4. Alpine Kiosk imajını oluştur
+      - name: Build Alpine Kiosk image
+        run: sudo ./build_image.sh
+      
+      # 5. Oluşan dosyaları listele (debug için)
+      - name: List generated files
         run: |
-          chmod +x build_image.sh
-          ./build_image.sh
-
-      - name: Upload files
-        uses: actions/upload-artifact@v3
+          echo "Generated files:"
+          ls -la vmlinuz initramfs alpine-kiosk.squashfs 2>/dev/null || echo "Files not found"
+      
+      # 6. Artifact'leri yükle (GÜNCELLENMİŞ v4)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: kiosk-image
-          path: ./output/*
+          name: alpine-kiosk-files
+          path: |
+            vmlinuz
+            initramfs
+            alpine-kiosk.squashfs
+          if-no-files-found: error
+          retention-days: 30
+      
+      # 7. (Opsiyonel) ISO formatında da paketle
+      - name: Create bootable ISO
+        if: success()
+        run: |
+          mkdir -p iso/boot/grub
+          cp vmlinuz iso/boot/
+          cp initramfs iso/boot/
+          cp alpine-kiosk.squashfs iso/boot/
+          
+          # GRUB konfigürasyonu
+          cat > iso/boot/grub/grub.cfg << 'EOF'
+          set timeout=5
+          set default=0
+          
+          menuentry "Alpine Kiosk" {
+            linux /boot/vmlinuz root=/dev/ram0 init=/init quiet
+            initrd /boot/initramfs
+          }
+          EOF
+          
+          # ISO oluştur
+          grub-mkrescue -o alpine-kiosk.iso iso/
+      
+      # 8. ISO'yu da artifact olarak yükle
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpine-kiosk-iso
+          path: alpine-kiosk.iso
+          retention-days: 30
